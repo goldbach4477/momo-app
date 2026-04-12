@@ -74,13 +74,6 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, onBac
 
       const parsed = parse(raw);
 
-      // Check for chapter preview — auto-save when user confirms
-      for (const m of parsed) {
-        if (m.preview) {
-          m.preview.storyId = storyId;
-        }
-      }
-
       setMsgs((p) => [...p, ...parsed]);
     } catch {
       setMsgs((p) => [...p, { role: "momo", text: "网络出了点问题，再试试？" }]);
