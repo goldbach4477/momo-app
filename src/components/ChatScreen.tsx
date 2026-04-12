@@ -26,12 +26,13 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, onBac
     if (!init.current) {
       init.current = true;
       if (initialStoryId) {
-        const story = getStory(initialStoryId);
-        if (story) {
-          setStoryTitle(story.title);
-          setChapterCount(story.chapters.length);
-          send(`我要继续创作《${story.title}》，已经写了${story.chapters.length}章。请帮我构思下一章的内容。`);
-        }
+        getStory(initialStoryId).then((story) => {
+          if (story) {
+            setStoryTitle(story.title);
+            setChapterCount(story.chapters.length);
+            send(`我要继续创作《${story.title}》，已经写了${story.chapters.length}章。请帮我构思下一章的内容。`);
+          }
+        });
       } else if (initialSeed) {
         send(`我想写一个故事，灵感是：${initialSeed}`);
       }
@@ -66,7 +67,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, onBac
       // Check for story creation
       const createMatch = raw.match(/\[CREATE_STORY\]\s*书名[：:]\s*(.+?)\s*\n\s*简介[：:]\s*([\s\S]+?)\s*\[\/CREATE_STORY\]/);
       if (createMatch && !storyId) {
-        const newStory = createStory(createMatch[1].trim(), createMatch[2].trim());
+        const newStory = await createStory(createMatch[1].trim(), createMatch[2].trim());
         setStoryId(newStory.id);
         setStoryTitle(newStory.title);
       }
@@ -88,16 +89,15 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, onBac
     }
   }
 
-  function saveChapter(title: string, body: string) {
+  async function saveChapter(title: string, body: string) {
     if (!storyId) {
-      // Create story with first chapter title
-      const newStory = createStory(title, "Momo帮你创作的故事");
+      const newStory = await createStory(title, "Momo帮你创作的故事");
       setStoryId(newStory.id);
       setStoryTitle(newStory.title);
-      addChapter(newStory.id, title, body);
+      await addChapter(newStory.id, title, body);
       setChapterCount(1);
     } else {
-      addChapter(storyId, title, body);
+      await addChapter(storyId, title, body);
       setChapterCount((n) => n + 1);
     }
   }
@@ -176,8 +176,8 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, onBac
                       <CardContent className="text-sm leading-[1.85] whitespace-pre-wrap">{m.preview.body}</CardContent>
                       <div className="px-4 pb-3 flex gap-2">
                         <Button size="sm" className="flex-1 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
-                          onClick={() => {
-                            saveChapter(m.preview!.title, m.preview!.body);
+                          onClick={async () => {
+                            await saveChapter(m.preview!.title, m.preview!.body);
                             onReadChapter(m.preview!.title, m.preview!.body);
                           }}>
                           ✅ 发布并阅读

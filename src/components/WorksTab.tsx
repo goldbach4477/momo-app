@@ -13,9 +13,20 @@ export default function WorksTab({ onContinue, onRead }: {
 }) {
   const [stories, setStories] = useState<Story[]>([]);
 
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    setStories(getStories());
+    getStories().then(setStories).finally(() => setLoading(false));
   }, []);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3" style={{ height: "calc(100dvh - 120px)" }}>
+        <span className="w-2 h-2 rounded-full bg-[#FF6B6B] dot-anim-1" />
+        <p className="text-xs text-muted-foreground">加载中...</p>
+      </div>
+    );
+  }
 
   if (stories.length === 0) {
     return (
@@ -46,7 +57,7 @@ export default function WorksTab({ onContinue, onRead }: {
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Badge variant="secondary">{story.chapters.length} 章</Badge>
               <span>·</span>
-              <span>更新于 {new Date(story.updatedAt).toLocaleDateString("zh-CN")}</span>
+              <span>更新于 {new Date(story.updated_at).toLocaleDateString("zh-CN")}</span>
             </div>
 
             {story.chapters.length > 0 && (
