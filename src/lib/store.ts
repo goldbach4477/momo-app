@@ -19,6 +19,8 @@ export type Story = {
 };
 
 export async function getStories(): Promise<Story[]> {
+  if (!supabase) return [];
+
   const { data: stories } = await supabase
     .from("stories")
     .select("*")
@@ -38,6 +40,8 @@ export async function getStories(): Promise<Story[]> {
 }
 
 export async function getStory(id: string): Promise<Story | undefined> {
+  if (!supabase) return undefined;
+
   const { data: story } = await supabase
     .from("stories")
     .select("*")
@@ -56,6 +60,8 @@ export async function getStory(id: string): Promise<Story | undefined> {
 }
 
 export async function createStory(title: string, description: string): Promise<Story> {
+  if (!supabase) throw new Error("Database not configured");
+
   const { data, error } = await supabase
     .from("stories")
     .insert({ title, description })
@@ -67,7 +73,8 @@ export async function createStory(title: string, description: string): Promise<S
 }
 
 export async function addChapter(storyId: string, title: string, content: string): Promise<Chapter> {
-  // Get current chapter count
+  if (!supabase) throw new Error("Database not configured");
+
   const { count } = await supabase
     .from("chapters")
     .select("*", { count: "exact", head: true })
@@ -83,15 +90,10 @@ export async function addChapter(storyId: string, title: string, content: string
 
   if (error) throw error;
 
-  // Update story's updated_at
   await supabase
     .from("stories")
     .update({ updated_at: new Date().toISOString() })
     .eq("id", storyId);
 
   return data;
-}
-
-export async function deleteStory(id: string) {
-  await supabase.from("stories").delete().eq("id", id);
 }
