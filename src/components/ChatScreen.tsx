@@ -1,78 +1,166 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import MomoOrb, { MomoOrbSmall } from "./MomoOrb";
+import { createStory, addChapter, getStory } from "@/lib/store";
 
 type Msg = { role: "momo" | "user"; text: string; choices?: string[]; preview?: { title: string; body: string } };
 
-export default function ChatScreen({ initialSeed, onBack, onReadChapter }: {
-  initialSeed: string; onBack: () => void; onReadChapter: (t: string, c: string) => void;
+export default function ChatScreen({ initialSeed, storyId: initialStoryId, onBack, onReadChapter }: {
+  initialSeed: string; storyId?: string; onBack: () => void; onReadChapter: (t: string, c: string) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [hist, setHist] = useState<{ role: string; content: string }[]>([]);
+  const [storyId, setStoryId] = useState<string | undefined>(initialStoryId);
+  const [storyTitle, setStoryTitle] = useState("");
+  const [chapterCount, setChapterCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const init = useRef(false);
 
-  useEffect(() => { if (!init.current) { init.current = true; send(`我想写一个故事，灵感是：${initialSeed}`); } }, [initialSeed]);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [msgs, loading]);
+  useEffect(() => {
+    if (!init.current) {
+      init.current = true;
+      if (initialStoryId) {
+        const story = getStory(initialStoryId);
+        if (story) {
+          setStoryTitle(story.title);
+          setChapterCount(story.chapters.length);
+          send(`我要继续创作《${story.title}》，已经写了${story.chapters.length}章。请帮我构思下一章的内容。`);
+        }
+      } else if (initialSeed) {
+        send(`我想写一个故事，灵感是：${initialSeed}`);
+      }
+    }
+  }, [initialSeed, initialStoryId]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [msgs, loading]);
 
   async function send(text: string) {
     setMsgs((p) => [...p, { role: "user", text }]);
     setLoading(true);
+
+    // Build system prompt with story context
+    const storyContext = storyId && storyTitle
+      ? `\n\n当前正在创作的小说：《${storyTitle}》，已完成${chapterCount}章。`
+      : `\n\n用户还没有创建作品。在对话初期，当你了解了故事的大致方向后，请建议用户给这个故事起一个名字。用这个格式：[CREATE_STORY]书名：xxx\n简介：xxx[/CREATE_STORY]`;
+
     const h = [...hist, { role: "user", content: text }];
+
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: h }) });
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: h, storyContext }),
+      });
       const data = await res.json();
       const raw = data.content || "Momo走神了…再说一遍？";
       setHist([...h, { role: "assistant", content: raw }]);
-      setMsgs((p) => [...p, ...parse(raw)]);
-    } catch { setMsgs((p) => [...p, { role: "momo", text: "网络出了点问题，再试试？" }]); }
-    finally { setLoading(false); }
+
+      // Check for story creation
+      const createMatch = raw.match(/\[CREATE_STORY\]\s*书名[：:]\s*(.+?)\s*\n\s*简介[：:]\s*([\s\S]+?)\s*\[\/CREATE_STORY\]/);
+      if (createMatch && !storyId) {
+        const newStory = createStory(createMatch[1].trim(), createMatch[2].trim());
+        setStoryId(newStory.id);
+        setStoryTitle(newStory.title);
+      }
+
+      const parsed = parse(raw);
+
+      // Check for chapter preview — auto-save when user confirms
+      for (const m of parsed) {
+        if (m.preview) {
+          m.preview.storyId = storyId;
+        }
+      }
+
+      setMsgs((p) => [...p, ...parsed]);
+    } catch {
+      setMsgs((p) => [...p, { role: "momo", text: "网络出了点问题，再试试？" }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function saveChapter(title: string, body: string) {
+    if (!storyId) {
+      // Create story with first chapter title
+      const newStory = createStory(title, "Momo帮你创作的故事");
+      setStoryId(newStory.id);
+      setStoryTitle(newStory.title);
+      addChapter(newStory.id, title, body);
+      setChapterCount(1);
+    } else {
+      addChapter(storyId, title, body);
+      setChapterCount((n) => n + 1);
+    }
   }
 
   function parse(raw: string): Msg[] {
     const out: Msg[] = [];
-    const pm = raw.match(/\[CHAPTER_PREVIEW\]\s*章节标题[：:]\s*(.+?)\s*---\s*([\s\S]+?)\s*\[\/CHAPTER_PREVIEW\]/);
+
+    // Remove CREATE_STORY blocks from display
+    let cleaned = raw.replace(/\[CREATE_STORY\][\s\S]*?\[\/CREATE_STORY\]/g, "").trim();
+
+    const pm = cleaned.match(/\[CHAPTER_PREVIEW\]\s*章节标题[：:]\s*(.+?)\s*---\s*([\s\S]+?)\s*\[\/CHAPTER_PREVIEW\]/);
     if (pm) {
-      const before = raw.slice(0, raw.indexOf("[CHAPTER_PREVIEW]")).trim();
-      const after = raw.slice(raw.indexOf("[/CHAPTER_PREVIEW]") + 18).trim();
+      const before = cleaned.slice(0, cleaned.indexOf("[CHAPTER_PREVIEW]")).trim();
+      const after = cleaned.slice(cleaned.indexOf("[/CHAPTER_PREVIEW]") + 18).trim();
       if (before) out.push({ role: "momo", text: before });
       out.push({ role: "momo", text: "", preview: { title: pm[1], body: pm[2].trim() } });
       if (after) out.push(...parse(after));
       return out;
     }
+
     const cp = [/(?:^|\n)\s*[A-C][.、）)]\s*.+/g, /(?:^|\n)\s*[1-3][.、）)]\s*.+/g];
-    let choices: string[] = [], text = raw;
-    for (const p of cp) { const m = raw.match(p); if (m && m.length >= 2) { choices = m.map((x) => x.trim()); for (const x of m) text = text.replace(x, ""); break; } }
+    let choices: string[] = [], text = cleaned;
+    for (const p of cp) {
+      const m = cleaned.match(p);
+      if (m && m.length >= 2) { choices = m.map((x) => x.trim()); for (const x of m) text = text.replace(x, ""); break; }
+    }
     text = text.replace(/\n{3,}/g, "\n\n").trim();
     if (text) out.push({ role: "momo", text, choices: choices.length >= 2 ? choices : undefined });
     else if (choices.length >= 2) out.push({ role: "momo", text: "你觉得呢？", choices });
-    return out.length ? out : [{ role: "momo", text: raw }];
+    return out.length ? out : [{ role: "momo", text: cleaned || raw }];
   }
 
-  function handleSend() { if (!input.trim() || loading) return; send(input.trim()); setInput(""); }
+  function handleSend() {
+    if (!input.trim() || loading) return;
+    send(input.trim());
+    setInput("");
+  }
+
+  const CHOICE_BG = ["#8B5CF6", "#06B6D4", "#10B981"];
 
   return (
-    <div className="flex flex-col h-full" style={{ background: "linear-gradient(180deg, #FFFAF8 0%, #F8F9FF 100%)" }}>
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex items-center gap-3 px-4 h-14 bg-white/85 backdrop-blur-md border-b border-gray-100 shrink-0 z-10">
-        <button onClick={onBack} className="btn-secondary w-8 h-8 flex items-center justify-center text-sm p-0">←</button>
+      <header className="flex items-center gap-3 px-4 h-14 bg-background/90 backdrop-blur-lg border-b shrink-0 z-10">
+        <Button variant="outline" size="icon-sm" onClick={onBack}>←</Button>
         <MomoOrbSmall speaking={loading} />
-        <div>
-          <p className="text-sm font-semibold text-gray-900 leading-tight">Momo</p>
-          <p className="text-[10px] text-gray-400">{loading ? "构思中..." : "你的故事编辑"}</p>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold leading-tight truncate">
+            {storyTitle ? `📖 ${storyTitle}` : "Momo"}
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            {loading ? "构思中..." : storyTitle ? `已写${chapterCount}章` : "新故事"}
+          </p>
         </div>
       </header>
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {msgs.map((m, i) => (
-          <div key={i} className="anim-in">
+          <div key={i}>
             {m.role === "user" ? (
               <div className="flex justify-end">
-                <div className="max-w-[75%] rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm leading-relaxed text-white" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)", boxShadow: "0 1px 4px rgba(255,107,107,0.15)" }}>
+                <div className="max-w-[75%] rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm leading-relaxed text-white" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}>
                   {m.text}
                 </div>
               </div>
@@ -80,38 +168,45 @@ export default function ChatScreen({ initialSeed, onBack, onReadChapter }: {
               <div className="flex items-start gap-2.5">
                 <MomoOrbSmall />
                 <div className="flex-1 space-y-2 min-w-0">
-                  {/* Preview */}
                   {m.preview && (
-                    <div className="card max-w-[88%] overflow-hidden" style={{ border: "1.5px solid #FFD4A8" }}>
-                      <div className="px-3.5 py-2 bg-orange-50/60 text-[11px] font-semibold text-orange-500 flex items-center gap-1.5">
+                    <Card className="max-w-[88%]" style={{ borderColor: "#FFD4A8", borderWidth: 1.5 }}>
+                      <div className="px-3.5 py-2 bg-muted text-[11px] font-semibold text-[#FF6B6B] flex items-center gap-1.5 rounded-t-xl">
                         📖 章节预览 · {m.preview.title}
                       </div>
-                      <div className="px-3.5 py-3 text-sm leading-[1.85] text-gray-800 whitespace-pre-wrap">{m.preview.body}</div>
-                      <div className="px-3.5 pb-3 flex gap-2">
-                        <button onClick={() => onReadChapter(m.preview!.title, m.preview!.body)} className="btn-primary flex-1 py-2 text-xs">📖 查看全文</button>
-                        <button onClick={() => send("换个感觉")} className="btn-secondary flex-1 py-2 text-xs">🔄 换一个</button>
+                      <CardContent className="text-sm leading-[1.85] whitespace-pre-wrap">{m.preview.body}</CardContent>
+                      <div className="px-4 pb-3 flex gap-2">
+                        <Button size="sm" className="flex-1 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
+                          onClick={() => {
+                            saveChapter(m.preview!.title, m.preview!.body);
+                            onReadChapter(m.preview!.title, m.preview!.body);
+                          }}>
+                          ✅ 发布并阅读
+                        </Button>
+                        <Button size="sm" variant="outline" className="flex-1" onClick={() => send("换个感觉")}>
+                          🔄 换一个
+                        </Button>
                       </div>
-                    </div>
+                    </Card>
                   )}
-                  {/* Text */}
+
                   {m.text && (
-                    <div className="card max-w-[88%] rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-sm leading-relaxed text-gray-800 whitespace-pre-wrap">
+                    <div className="max-w-[88%] bg-card rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-sm leading-relaxed ring-1 ring-border whitespace-pre-wrap">
                       {m.text}
                     </div>
                   )}
-                  {/* Choices */}
+
                   {m.choices && (
-                    <div className="space-y-2 max-w-[88%]">
+                    <div className="space-y-1.5 max-w-[88%]">
                       {m.choices.map((c, j) => (
-                        <button key={j} onClick={() => !loading && send(c)} className="w-full card px-3.5 py-2.5 text-left text-sm text-gray-800 cursor-pointer hover:shadow-md transition-shadow flex items-center gap-2.5">
-                          <span className="w-6 h-6 rounded-md text-white text-[10px] font-bold flex items-center justify-center shrink-0" style={{ background: ["#8B5CF6","#06B6D4","#10B981"][j] || "#8B5CF6" }}>
+                        <button key={j} onClick={() => !loading && send(c)} className="w-full bg-card rounded-xl px-3.5 py-2.5 text-left text-sm ring-1 ring-border cursor-pointer hover:ring-[#FF6B6B]/40 hover:shadow-sm transition-all flex items-center gap-2.5">
+                          <span className="w-6 h-6 rounded-md text-white text-[10px] font-bold flex items-center justify-center shrink-0" style={{ background: CHOICE_BG[j] || CHOICE_BG[0] }}>
                             {String.fromCharCode(65 + j)}
                           </span>
                           <span className="flex-1">{c.replace(/^[A-C1-3][.、）)]\s*/, "")}</span>
                         </button>
                       ))}
-                      <button onClick={() => (document.querySelector(".chat-input") as HTMLInputElement)?.focus()} className="w-full rounded-2xl px-3.5 py-2.5 text-left text-sm text-orange-400 cursor-pointer border border-dashed border-orange-200 bg-orange-50/40 hover:bg-orange-50 transition-colors flex items-center gap-2.5">
-                        <span className="w-6 h-6 rounded-md text-white text-[10px] font-bold flex items-center justify-center shrink-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}>🎤</span>
+                      <button onClick={() => (document.querySelector(".chat-input") as HTMLInputElement)?.focus()} className="w-full rounded-xl px-3.5 py-2.5 text-left text-sm text-[#FF6B6B] cursor-pointer border border-dashed border-[#FF6B6B]/30 bg-[#FF6B6B]/5 hover:bg-[#FF6B6B]/10 transition-colors flex items-center gap-2.5">
+                        <span className="w-6 h-6 rounded-md text-white text-[10px] flex items-center justify-center shrink-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}>🎤</span>
                         <span>我有自己的想法</span>
                       </button>
                     </div>
@@ -123,28 +218,30 @@ export default function ChatScreen({ initialSeed, onBack, onReadChapter }: {
         ))}
 
         {loading && (
-          <div className="flex items-start gap-2.5 anim-fade">
+          <div className="flex items-start gap-2.5">
             <MomoOrbSmall speaking />
-            <div className="card rounded-2xl rounded-tl-sm px-4 py-3 flex gap-2">
-              <span className="w-2 h-2 rounded-full bg-orange-300 dot-anim-1" />
-              <span className="w-2 h-2 rounded-full bg-orange-400 dot-anim-2" />
-              <span className="w-2 h-2 rounded-full bg-orange-500 dot-anim-3" />
+            <div className="bg-card rounded-2xl rounded-tl-sm px-4 py-3 ring-1 ring-border flex gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#FF6B6B] dot-anim-1" />
+              <span className="w-2 h-2 rounded-full bg-[#FF9A5C] dot-anim-2" />
+              <span className="w-2 h-2 rounded-full bg-[#FFD06B] dot-anim-3" />
             </div>
           </div>
         )}
 
         {msgs.length === 0 && !loading && (
-          <div className="flex flex-col items-center justify-center pt-20 anim-fade">
+          <div className="flex flex-col items-center justify-center pt-20">
             <MomoOrb size={100} />
-            <p className="text-sm text-gray-400 mt-5">Momo 正在准备...</p>
+            <p className="text-sm text-muted-foreground mt-5">Momo 正在准备...</p>
           </div>
         )}
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 px-4 py-3 bg-white/85 backdrop-blur-md border-t border-gray-100 shrink-0">
-        <input type="text" className="chat-input flex-1 bg-gray-50 border border-gray-100 rounded-xl px-4 py-2.5 text-sm outline-none transition-all focus:border-orange-200 focus:bg-white" placeholder="🎤 说说你的想法..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()} disabled={loading} />
-        <button onClick={handleSend} disabled={!input.trim() || loading} className="btn-primary w-10 h-10 flex items-center justify-center text-base disabled:opacity-25">↑</button>
+      <div className="flex items-center gap-2 px-4 py-3 bg-background/90 backdrop-blur-lg border-t shrink-0">
+        <Input className="chat-input h-10 flex-1" placeholder="🎤 说说你的想法..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()} disabled={loading} />
+        <Button size="icon" className="h-10 w-10 shrink-0 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }} onClick={handleSend} disabled={!input.trim() || loading}>
+          ↑
+        </Button>
       </div>
     </div>
   );
