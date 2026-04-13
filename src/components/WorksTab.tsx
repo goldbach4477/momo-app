@@ -7,17 +7,17 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { getStories, type Story } from "@/lib/store";
 
-export default function WorksTab({ onContinue, onRead }: {
+export default function WorksTab({ userId, onContinue, onRead }: {
+  userId: string;
   onContinue: (storyId: string) => void;
   onRead: (title: string, content: string) => void;
 }) {
   const [stories, setStories] = useState<Story[]>([]);
-
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getStories().then(setStories).finally(() => setLoading(false));
-  }, []);
+    getStories(userId).then(setStories).finally(() => setLoading(false));
+  }, [userId]);
 
   if (loading) {
     return (
@@ -51,43 +51,62 @@ export default function WorksTab({ onContinue, onRead }: {
         <Card key={story.id}>
           <CardHeader>
             <CardTitle>{story.title}</CardTitle>
-            <CardDescription>{story.description}</CardDescription>
+            <CardDescription>{story.meta.display_description}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Badge variant="secondary">{story.chapters.length} 章</Badge>
+              {story.meta.characters.length > 0 && <Badge variant="outline">{story.meta.characters.length} 个角色</Badge>}
               <span>·</span>
               <span>更新于 {new Date(story.updated_at).toLocaleDateString("zh-CN")}</span>
             </div>
 
+            {/* World building / plot summary */}
+            {(story.meta.world_building || story.meta.plot_summary) && (
+              <>
+                <Separator />
+                <div className="space-y-2 text-xs text-muted-foreground">
+                  {story.meta.plot_summary && <p>📋 {story.meta.plot_summary}</p>}
+                  {story.meta.world_building && <p>🌍 {story.meta.world_building}</p>}
+                </div>
+              </>
+            )}
+
+            {/* Characters */}
+            {story.meta.characters.length > 0 && (
+              <>
+                <Separator />
+                <div className="flex flex-wrap gap-2">
+                  {story.meta.characters.map((c, i) => (
+                    <Badge key={i} variant="outline" className="text-xs">
+                      {c.name} · {c.role}
+                    </Badge>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Chapters */}
             {story.chapters.length > 0 && (
               <>
                 <Separator />
                 <div className="space-y-1.5">
                   {story.chapters.map((ch) => (
-                    <button
-                      key={ch.id}
-                      onClick={() => onRead(ch.title, ch.content)}
-                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-muted transition-colors text-sm flex items-center justify-between group"
-                    >
+                    <button key={ch.id} onClick={() => onRead(ch.title, ch.content)}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-muted transition-colors text-sm flex items-center justify-between group">
                       <span>
                         <span className="text-muted-foreground mr-2">第{ch.number}章</span>
                         {ch.title}
                       </span>
-                      <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-                        阅读 →
-                      </span>
+                      <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">阅读 →</span>
                     </button>
                   ))}
                 </div>
               </>
             )}
 
-            <Button
-              className="w-full text-white border-0"
-              style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
-              onClick={() => onContinue(story.id)}
-            >
+            <Button className="w-full text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
+              onClick={() => onContinue(story.id)}>
               继续创作
             </Button>
           </CardContent>
