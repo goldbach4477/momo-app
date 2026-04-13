@@ -56,18 +56,33 @@ ${storyContext || ""}
 
   const apiMessages = [{ role: "system", content: systemPrompt }, ...messages];
 
-  try {
-    const res = await fetch(process.env.MINIMAX_API_URL!, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.MINIMAX_API_KEY}` },
-      body: JSON.stringify({ model: process.env.MINIMAX_MODEL || "MiniMax-M2.7", messages: apiMessages, max_tokens: 4096, temperature: 0.85 }),
-    });
-    const data = await res.json();
-    if (!res.ok) return Response.json({ error: data }, { status: res.status });
-    let content = data.choices?.[0]?.message?.content || "";
-    content = content.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
-    return Response.json({ content });
-  } catch (err) {
-    return Response.json({ error: "Failed to call MiniMax API", detail: String(err) }, { status: 500 });
+  // Try primary model, fallback to lighter model if overloaded
+  const models = [process.env.MINIMAX_MODEL || "MiniMax-M2.7", "MiniMax-M1"];
+
+  for (const model of models) {
+    try {
+      const res = await fetch(process.env.MINIMAX_API_URL!, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.MINIMAX_API_KEY}` },
+        body: JSON.stringify({ model, messages: apiMessages, max_tokens: 4096, temperature: 0.85 }),
+      });
+      const data = await res.json();
+
+      // If overloaded (529), try next model
+      if (data.error?.http_code === "529" || res.status === 529) {
+        console.log(`Model ${model} overloaded, trying fallback...`);
+        continue;
+      }
+
+      if (!res.ok) return Response.json({ error: data }, { status: res.status });
+      let content = data.choices?.[0]?.message?.content || "";
+      content = content.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+      return Response.json({ content });
+    } catch (err) {
+      console.log(`Model ${model} failed:`, err);
+      continue;
+    }
   }
+
+  return Response.json({ error: "AI服务暂时繁忙，请稍后重试" }, { status: 503 });
 }
