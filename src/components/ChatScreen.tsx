@@ -20,22 +20,21 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
   const [storyTitle, setStoryTitle] = useState("");
   const [chapterCount, setChapterCount] = useState(0);
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; body: string } | null>(null);
+  const [showMenu, setShowMenu] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const init = useRef(false);
+  const msgCount = useRef(0);
 
   useEffect(() => {
     if (!init.current) {
       init.current = true;
       if (initialStoryId) {
         getStory(initialStoryId).then((story) => {
-          if (story) {
-            setStoryTitle(story.title);
-            setChapterCount(story.chapters.length);
-            send(`我要继续创作《${story.title}》，已经写了${story.chapters.length}章。请帮我构思下一章的内容。`);
-          }
+          if (story) { setStoryTitle(story.title); setChapterCount(story.chapters.length); send(`我要继续创作《${story.title}》，已写${story.chapters.length}章。帮我构思下一章。`, "pro"); }
         });
       } else if (initialSeed) {
-        send(`我想写一个故事，灵感是：${initialSeed}`);
+        send(`我想写一个故事，灵感是：${initialSeed}`, "pro");
       }
     }
   }, [initialSeed, initialStoryId]);
@@ -44,46 +43,29 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, loading]);
 
-  async function send(text: string) {
+  async function send(text: string, mode?: string) {
     setMsgs((p) => [...p, { role: "user", text }]);
     setLoading(true);
+    msgCount.current++;
+
+    // Use flash for first greeting and short responses, pro for creation
+    const autoMode = mode || (msgCount.current <= 1 ? "flash" : "pro");
 
     const storyContext = storyId && storyTitle
-      ? `\n\n当前正在创作的小说：《${storyTitle}》，已完成${chapterCount}章。继续引导下一章创作。`
-      : `\n\n用户还没有创建作品。请先跟用户聊清楚故事的世界观、主要人物、大致剧情方向，然后再建议创建作品和开始写章节。不要急着生成章节。`;
+      ? `\n\n当前创作：《${storyTitle}》，已完成${chapterCount}章。`
+      : `\n\n用户还没创建作品。先聊清楚故事方向、世界观、人物，再建议创建。`;
 
     const h = [...hist, { role: "user", content: text }];
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: h, storyContext }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: h, storyContext, mode: autoMode }) });
       const data = await res.json();
       const raw = data.content || "Momo走神了…再说一遍？";
       setHist([...h, { role: "assistant", content: raw }]);
 
-      // Handle story creation
       const createMatch = raw.match(/\[CREATE_STORY\]\s*书名[：:]\s*(.+?)\s*\n\s*简介[：:]\s*([\s\S]+?)\s*\[\/CREATE_STORY\]/);
       if (createMatch && !storyId) {
-        const newStory = await createStory(createMatch[1].trim(), userId, createMatch[2].trim());
-        setStoryId(newStory.id);
-        setStoryTitle(newStory.title);
-      }
-
-      // Handle story metadata updates
-      const worldMatch = raw.match(/\[WORLD\]([\s\S]+?)\[\/WORLD\]/);
-      const plotMatch = raw.match(/\[PLOT\]([\s\S]+?)\[\/PLOT\]/);
-      const charMatch = raw.match(/\[CHARACTER\]\s*姓名[：:]\s*(.+?)\s*\n\s*身份[：:]\s*(.+?)\s*\n\s*描述[：:]\s*([\s\S]+?)\s*\[\/CHARACTER\]/g);
-
-      if (storyId && (worldMatch || plotMatch || charMatch)) {
-        const updates: Record<string, unknown> = {};
-        if (worldMatch) updates.world_building = worldMatch[1].trim();
-        if (plotMatch) updates.plot_summary = plotMatch[1].trim();
-        if (charMatch) {
-          const chars = charMatch.map((cm: string) => {
-            const cmMatch = cm.match(/姓名[：:]\s*(.+?)\s*\n\s*身份[：:]\s*(.+?)\s*\n\s*描述[：:]\s*([\s\S]+?)\s*\[\/CHARACTER\]/);
-            return cmMatch ? { name: cmMatch[1], role: cmMatch[2], description: cmMatch[3].trim() } : null;
-          }).filter(Boolean);
-          if (chars.length) updates.characters = chars;
-        }
-        await updateStoryMeta(storyId, updates);
+        const s = await createStory(createMatch[1].trim(), userId, createMatch[2].trim());
+        setStoryId(s.id); setStoryTitle(s.title);
       }
 
       setMsgs((p) => [...p, ...parse(raw)]);
@@ -92,30 +74,60 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
     } finally { setLoading(false); }
   }
 
-  async function handleConfirmChapter() {
-    if (!confirmDialog) return;
-    if (!storyId) {
-      const newStory = await createStory(confirmDialog.title, userId);
-      setStoryId(newStory.id);
-      setStoryTitle(newStory.title);
-      await addChapter(newStory.id, confirmDialog.title, confirmDialog.body);
-      setChapterCount(1);
-    } else {
-      await addChapter(storyId, confirmDialog.title, confirmDialog.body);
-      setChapterCount((n) => n + 1);
+  // Extract settings & chapters from conversation and save to story
+  async function extractToStory() {
+    if (!storyId && !storyTitle) {
+      setMsgs((p) => [...p, { role: "momo", text: "嗯？还没创建作品呢。先跟我聊聊你的故事，我来帮你整理。" }]);
+      return;
     }
-    const t = confirmDialog.title, b = confirmDialog.body;
-    setConfirmDialog(null);
-    onReadChapter(t, b);
+    setExtracting(true);
+    setShowMenu(false);
+    setMsgs((p) => [...p, { role: "momo", text: "让我整理一下我们聊的内容..." }]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: hist, mode: "extract" }),
+      });
+      const data = await res.json();
+      let content = data.content || "";
+      content = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+
+      const match = content.match(/\{[\s\S]*\}/);
+      if (match) {
+        const extracted = JSON.parse(match[0]);
+        const sid = storyId!;
+
+        const updates: Record<string, unknown> = {};
+        if (extracted.world_building) updates.world_building = extracted.world_building;
+        if (extracted.plot_summary) updates.plot_summary = extracted.plot_summary;
+        if (extracted.characters?.length) updates.characters = extracted.characters;
+
+        if (Object.keys(updates).length) await updateStoryMeta(sid, updates);
+
+        if (extracted.chapter?.title && extracted.chapter?.content) {
+          await addChapter(sid, extracted.chapter.title, extracted.chapter.content);
+          setChapterCount((n) => n + 1);
+        }
+
+        const parts = [];
+        if (updates.world_building) parts.push("世界观");
+        if (updates.characters) parts.push(`${(extracted.characters as unknown[]).length}个角色`);
+        if (updates.plot_summary) parts.push("剧情概要");
+        if (extracted.chapter?.title) parts.push(`章节"${extracted.chapter.title}"`);
+
+        setMsgs((p) => [...p, { role: "momo", text: parts.length ? `搞定。已更新到作品：${parts.join("、")}。去"我的作品"看看？` : "嗯，暂时没找到可以整理的新内容。我们继续聊吧。" }]);
+      } else {
+        setMsgs((p) => [...p, { role: "momo", text: "没整理出来...我们继续聊，内容丰富一些再试。" }]);
+      }
+    } catch {
+      setMsgs((p) => [...p, { role: "momo", text: "整理失败了，稍后再试。" }]);
+    } finally { setExtracting(false); }
   }
 
   function parse(raw: string): Msg[] {
     const out: Msg[] = [];
-    let cleaned = raw.replace(/\[CREATE_STORY\][\s\S]*?\[\/CREATE_STORY\]/g, "")
-      .replace(/\[WORLD\][\s\S]*?\[\/WORLD\]/g, "")
-      .replace(/\[PLOT\][\s\S]*?\[\/PLOT\]/g, "")
-      .replace(/\[CHARACTER\][\s\S]*?\[\/CHARACTER\]/g, "")
-      .trim();
+    let cleaned = raw.replace(/\[CREATE_STORY\][\s\S]*?\[\/CREATE_STORY\]/g, "").trim();
 
     const pm = cleaned.match(/\[CHAPTER_PREVIEW\]\s*章节标题[：:]\s*(.+?)\s*---\s*([\s\S]+?)\s*\[\/CHAPTER_PREVIEW\]/);
     if (pm) {
@@ -141,7 +153,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
 
   return (
     <div className="flex flex-col h-full">
-      {/* Confirmation dialog */}
+      {/* Confirm dialog */}
       {confirmDialog && (
         <div className="absolute inset-0 z-50 bg-black/40 flex items-center justify-center p-6" onClick={() => setConfirmDialog(null)}>
           <Card className="w-full max-w-[340px]" onClick={(e) => e.stopPropagation()}>
@@ -153,9 +165,13 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setConfirmDialog(null)}>取消</Button>
-                <Button className="flex-1 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }} onClick={handleConfirmChapter}>
-                  ✅ 确认发布
-                </Button>
+                <Button className="flex-1 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
+                  onClick={async () => {
+                    const t = confirmDialog.title, b = confirmDialog.body;
+                    if (!storyId) { const s = await createStory(t, userId); setStoryId(s.id); setStoryTitle(s.title); await addChapter(s.id, t, b); }
+                    else { await addChapter(storyId, t, b); }
+                    setChapterCount((n) => n + 1); setConfirmDialog(null); onReadChapter(t, b);
+                  }}>✅ 确认发布</Button>
               </div>
             </CardContent>
           </Card>
@@ -178,9 +194,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
           <div key={i}>
             {m.role === "user" ? (
               <div className="flex justify-end">
-                <div className="max-w-[75%] rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm leading-relaxed text-white" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}>
-                  {m.text}
-                </div>
+                <div className="max-w-[75%] rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm leading-relaxed text-white" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}>{m.text}</div>
               </div>
             ) : (
               <div className="flex items-start gap-2.5">
@@ -188,24 +202,16 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
                 <div className="flex-1 space-y-2 min-w-0">
                   {m.preview && (
                     <Card className="max-w-[88%]" style={{ borderColor: "#FFD4A8", borderWidth: 1.5 }}>
-                      <div className="px-3.5 py-2 bg-muted text-[11px] font-semibold text-[#FF6B6B] flex items-center gap-1.5 rounded-t-xl">
-                        📖 章节预览 · {m.preview.title}
-                      </div>
+                      <div className="px-3.5 py-2 bg-muted text-[11px] font-semibold text-[#FF6B6B] flex items-center gap-1.5 rounded-t-xl">📖 章节预览 · {m.preview.title}</div>
                       <CardContent className="text-sm leading-[1.85] whitespace-pre-wrap max-h-48 overflow-y-auto">{m.preview.body}</CardContent>
                       <div className="px-4 pb-3 flex gap-2">
                         <Button size="sm" className="flex-1 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
-                          onClick={() => setConfirmDialog({ title: m.preview!.title, body: m.preview!.body })}>
-                          ✅ 发布这一章
-                        </Button>
-                        <Button size="sm" variant="outline" className="flex-1" onClick={() => send("换个感觉")}>
-                          🔄 换一个
-                        </Button>
+                          onClick={() => setConfirmDialog({ title: m.preview!.title, body: m.preview!.body })}>✅ 发布这一章</Button>
+                        <Button size="sm" variant="outline" className="flex-1" onClick={() => send("换个感觉", "pro")}>🔄 换一个</Button>
                       </div>
                     </Card>
                   )}
-                  {m.text && (
-                    <div className="max-w-[88%] bg-card rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-sm leading-relaxed ring-1 ring-border whitespace-pre-wrap">{m.text}</div>
-                  )}
+                  {m.text && <div className="max-w-[88%] bg-card rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-sm leading-relaxed ring-1 ring-border whitespace-pre-wrap">{m.text}</div>}
                   {m.choices && (
                     <div className="space-y-1.5 max-w-[88%]">
                       {m.choices.map((c, j) => (
@@ -240,10 +246,30 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         )}
       </div>
 
-      {/* Input */}
-      <div className="flex items-center gap-2 px-4 py-3 bg-background/90 backdrop-blur-lg border-t shrink-0">
-        <Input className="chat-input h-10 flex-1" placeholder="🎤 说说你的想法..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()} disabled={loading} />
-        <Button size="icon" className="h-10 w-10 shrink-0 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }} onClick={handleSend} disabled={!input.trim() || loading}>↑</Button>
+      {/* Input bar with + menu */}
+      <div className="relative shrink-0">
+        {/* + Menu popup */}
+        {showMenu && (
+          <div className="absolute bottom-full left-4 mb-2 bg-card rounded-xl ring-1 ring-border shadow-lg p-1 z-20 min-w-[180px]">
+            <button onClick={extractToStory} disabled={extracting} className="w-full text-left px-3 py-2.5 text-sm rounded-lg hover:bg-muted transition-colors flex items-center gap-2.5 disabled:opacity-50">
+              <span className="text-base">📝</span>
+              <span>{extracting ? "整理中..." : "插入作品"}</span>
+            </button>
+            <button className="w-full text-left px-3 py-2.5 text-sm rounded-lg hover:bg-muted transition-colors flex items-center gap-2.5 opacity-50" disabled>
+              <span className="text-base">🖼️</span>
+              <span>上传参考图片</span>
+            </button>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 px-4 py-3 bg-background/90 backdrop-blur-lg border-t">
+          {/* + button */}
+          <Button variant="outline" size="icon-sm" onClick={() => setShowMenu(!showMenu)} className="shrink-0">
+            <span className={`text-base transition-transform ${showMenu ? "rotate-45" : ""}`}>+</span>
+          </Button>
+          <Input className="chat-input h-10 flex-1" placeholder="🎤 说说你的想法..." value={input} onChange={(e) => { setInput(e.target.value); setShowMenu(false); }} onKeyDown={(e) => e.key === "Enter" && handleSend()} disabled={loading || extracting} />
+          <Button size="icon" className="h-10 w-10 shrink-0 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }} onClick={handleSend} disabled={!input.trim() || loading || extracting}>↑</Button>
+        </div>
       </div>
     </div>
   );
