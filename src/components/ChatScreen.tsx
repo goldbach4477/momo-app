@@ -110,7 +110,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
           setChapterCount((n) => n + 1);
         }
 
-        const parts = [];
+        const parts: string[] = [];
         if (updates.world_building) parts.push("世界观");
         if (updates.characters) parts.push(`${(extracted.characters as unknown[]).length}个角色`);
         if (updates.plot_summary) parts.push("剧情概要");
