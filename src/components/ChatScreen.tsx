@@ -77,9 +77,9 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         if (worldMatch) updates.world_building = worldMatch[1].trim();
         if (plotMatch) updates.plot_summary = plotMatch[1].trim();
         if (charMatch) {
-          const chars = charMatch.map((m) => {
-            const match = m.match(/姓名[：:]\s*(.+?)\s*\n\s*身份[：:]\s*(.+?)\s*\n\s*描述[：:]\s*([\s\S]+?)\s*\[\/CHARACTER\]/);
-            return match ? { name: match[1], role: match[2], description: match[3].trim() } : null;
+          const chars = charMatch.map((cm: string) => {
+            const cmMatch = cm.match(/姓名[：:]\s*(.+?)\s*\n\s*身份[：:]\s*(.+?)\s*\n\s*描述[：:]\s*([\s\S]+?)\s*\[\/CHARACTER\]/);
+            return cmMatch ? { name: cmMatch[1], role: cmMatch[2], description: cmMatch[3].trim() } : null;
           }).filter(Boolean);
           if (chars.length) updates.characters = chars;
         }
