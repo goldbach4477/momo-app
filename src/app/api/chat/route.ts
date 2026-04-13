@@ -57,7 +57,7 @@ ${storyContext || ""}
   const apiMessages = [{ role: "system", content: systemPrompt }, ...messages];
 
   // Try primary model, fallback to lighter model if overloaded
-  const models = [process.env.MINIMAX_MODEL || "MiniMax-M2.7", "MiniMax-M1"];
+  const models = [process.env.MINIMAX_MODEL || "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M1"];
 
   for (const model of models) {
     try {
