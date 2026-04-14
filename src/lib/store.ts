@@ -98,12 +98,24 @@ function serialize(meta: StoryMeta): string {
 
 export async function getStories(userId?: string): Promise<Story[]> {
   if (!supabase) return [];
-  const { data: stories } = await supabase.from("stories").select("*").order("updated_at", { ascending: false });
-  if (!stories) return [];
-  const { data: chapters } = await supabase.from("chapters").select("*").order("number", { ascending: true });
-  return stories
-    .map((s) => ({ ...s, meta: parseMeta(s.description), chapters: (chapters || []).filter((c) => c.story_id === s.id) }))
-    .filter((s) => !userId || s.meta.user_id === userId);
+  try {
+    const { data: stories, error: sErr } = await supabase.from("stories").select("*").order("updated_at", { ascending: false });
+    if (sErr) { console.error("Stories query error:", sErr); return []; }
+    if (!stories) return [];
+    const { data: chapters } = await supabase.from("chapters").select("*").order("number", { ascending: true });
+    return stories
+      .map((s) => {
+        try {
+          return { ...s, meta: parseMeta(s.description), chapters: (chapters || []).filter((c) => c.story_id === s.id) };
+        } catch {
+          return { ...s, meta: emptyMeta(""), chapters: [] };
+        }
+      })
+      .filter((s) => !userId || s.meta.user_id === userId);
+  } catch (err) {
+    console.error("getStories failed:", err);
+    return [];
+  }
 }
 
 export async function getStory(id: string): Promise<Story | undefined> {

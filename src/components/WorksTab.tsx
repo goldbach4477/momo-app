@@ -19,7 +19,12 @@ export default function WorksTab({ userId, onContinue, onRead }: {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [tab, setTab] = useState<"settings" | "chapters">("settings");
 
-  useEffect(() => { getStories(userId).then(setStories).finally(() => setLoading(false)); }, [userId]);
+  useEffect(() => {
+    getStories(userId)
+      .then(setStories)
+      .catch((err) => { console.error("Failed to load stories:", err); setStories([]); })
+      .finally(() => setLoading(false));
+  }, [userId]);
 
   if (loading) return <div className="flex items-center justify-center" style={{ height: "calc(100dvh - 120px)" }}><span className="w-2 h-2 rounded-full bg-[#FF6B6B] dot-anim-1" /></div>;
   if (stories.length === 0) return (

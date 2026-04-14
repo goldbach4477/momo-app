@@ -23,7 +23,7 @@ export default function HomeTab({ userId, onStartChat, onContinueStory }: {
     if (userId) {
       getStories(userId).then((stories) => {
         if (stories.length > 0) setRecentStory(stories[0]);
-      });
+      }).catch(() => {});
     }
   }, [userId]);
 
