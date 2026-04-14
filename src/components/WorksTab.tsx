@@ -20,9 +20,18 @@ export default function WorksTab({ userId, onContinue, onRead }: {
   const [tab, setTab] = useState<"settings" | "chapters">("settings");
 
   useEffect(() => {
+    // Show cached stories instantly, then refresh from DB
+    try {
+      const cached = localStorage.getItem(`momo_stories_${userId}`);
+      if (cached) { setStories(JSON.parse(cached)); setLoading(false); }
+    } catch {}
+
     getStories(userId)
-      .then(setStories)
-      .catch((err) => { console.error("Failed to load stories:", err); setStories([]); })
+      .then((s) => {
+        setStories(s);
+        localStorage.setItem(`momo_stories_${userId}`, JSON.stringify(s));
+      })
+      .catch((err) => { console.error("Failed to load stories:", err); })
       .finally(() => setLoading(false));
   }, [userId]);
 

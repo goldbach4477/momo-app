@@ -141,9 +141,20 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         const ex = JSON.parse(match[0]);
         const parts: string[] = [];
 
+        // Auto-create story if it doesn't exist
+        let sid = storyId;
+        if (!sid) {
+          const title = ex.outline?.overall?.slice(0, 20) || initialSeed?.slice(0, 15) || "新故事";
+          const s = await createStory(title, userId, initialSeed?.slice(0, 50));
+          sid = s.id;
+          setStoryId(s.id);
+          setStoryTitle(s.title);
+          parts.push(`创建作品"${s.title}"`);
+        }
+
         // Merge codex entries
         if (ex.codex?.length) {
-          if (storyId) await mergeCodex(storyId, ex.codex);
+          await mergeCodex(sid, ex.codex);
           setCodex((prev) => {
             const merged = [...prev];
             for (const entry of ex.codex) {
@@ -163,7 +174,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
 
         // Merge outline
         if (ex.outline?.overall || ex.outline?.chapters?.length) {
-          if (storyId) await mergeOutline(storyId, ex.outline.overall, ex.outline.chapters);
+          await mergeOutline(sid, ex.outline.overall, ex.outline.chapters);
           setOutline((prev) => ({
             overall: ex.outline.overall || prev.overall,
             chapters: ex.outline.chapters?.length ? ex.outline.chapters : prev.chapters,
@@ -173,8 +184,8 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         }
 
         // Handle chapter content
-        if (ex.chapter?.content && storyId) {
-          await addChapter(storyId, ex.chapter.title || `第${chapterCount + 1}章`, ex.chapter.content);
+        if (ex.chapter?.content && sid) {
+          await addChapter(sid, ex.chapter.title || `第${chapterCount + 1}章`, ex.chapter.content);
           setChapterCount((n) => n + 1);
           parts.push(`章节"${ex.chapter.title}"`);
         }
