@@ -5,15 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import MomoOrb, { MomoOrbSmall } from "./MomoOrb";
-import { createStory, addChapter, getStory, updateStoryMeta } from "@/lib/store";
+import { createStory, addChapter, getStory, mergeCodex, mergeOutline, updateStoryMeta, type CodexEntry, type OutlineChapter } from "@/lib/store";
 import DraftMode from "./DraftMode";
 
-type Msg = {
-  role: "momo" | "user";
-  text: string;
-  choices?: string[];
-  paragraph?: string;
-};
+type Msg = { role: "momo" | "user"; text: string; choices?: string[]; paragraph?: string };
 
 export default function ChatScreen({ initialSeed, storyId: initialStoryId, userId, onBack, onReadChapter }: {
   initialSeed: string; storyId?: string; userId: string; onBack: () => void; onReadChapter: (t: string, c: string) => void;
@@ -27,9 +22,11 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
   const [chapterCount, setChapterCount] = useState(0);
   const [viewMode, setViewMode] = useState<"chat" | "draft">("chat");
   const [draftParagraphs, setDraftParagraphs] = useState<string[]>([]);
-  const [draftMeta, setDraftMeta] = useState({ world: "", characters: "", plot: "" });
+  const [codex, setCodex] = useState<CodexEntry[]>([]);
+  const [outline, setOutline] = useState<{ overall: string; chapters: OutlineChapter[] }>({ overall: "", chapters: [] });
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; body: string } | null>(null);
   const [isWritingChapter, setIsWritingChapter] = useState(false);
+  const [extracting, setExtracting] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const init = useRef(false);
@@ -41,25 +38,15 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
       if (initialStoryId) {
         getStory(initialStoryId).then((story) => {
           if (story) {
-            setStoryTitle(story.title);
-            setChapterCount(story.chapters.length);
-            setDraftMeta({
-              world: story.meta.world_building,
-              characters: story.meta.characters.map((c) => `**${c.name}** (${c.role}): ${c.description}`).join("\n"),
-              plot: story.meta.plot_summary,
-            });
+            setStoryTitle(story.title); setChapterCount(story.chapters.length);
+            setCodex(story.meta.codex); setOutline(story.meta.outline);
             send(`继续创作《${story.title}》，已写${story.chapters.length}章。`, "pro");
           }
         });
       } else if (initialSeed) {
-        // Show opening choice
         setMsgs([{
-          role: "momo",
-          text: `嗯，这个设定有点意思。你想先从哪里开始？`,
-          choices: [
-            "A. 直接写第一章，找找感觉",
-            "B. 先聊聊设定——世界观、人物、大纲",
-          ],
+          role: "momo", text: `嗯，这个灵感有点意思。你想先从哪里开始？`,
+          choices: ["A. 直接写第一章，先找感觉", "B. 先聊设定——世界观、人物、大纲"],
         }]);
       }
     }
@@ -73,11 +60,10 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
     setMsgs((p) => [...p, { role: "user", text }]);
     setLoading(true);
     msgCount.current++;
-
     const autoMode = mode || (msgCount.current <= 1 ? "flash" : "pro");
-    const writingInfo = isWritingChapter ? `正在写第${chapterCount + 1}章，已写${draftParagraphs.length}段。请继续写下一段（用[PARAGRAPH]标记）。` : "";
+    const writingInfo = isWritingChapter ? `正在写第${chapterCount + 1}章，已写${draftParagraphs.length}段。` : "";
     const storyCtx = storyId && storyTitle
-      ? `\n\n当前创作：《${storyTitle}》，已完成${chapterCount}章。${writingInfo}`
+      ? `\n\n当前创作：《${storyTitle}》，已完成${chapterCount}章。${writingInfo}\n已有设定：${codex.length}条，大纲：${outline.chapters.length}章`
       : `\n\n故事灵感：${initialSeed}\n用户还没创建作品。`;
 
     const h = [...hist, { role: "user", content: text }];
@@ -87,20 +73,15 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
       const raw = data.content || "Momo走神了…再说一遍？";
       setHist([...h, { role: "assistant", content: raw }]);
 
-      // Handle story creation
       const createMatch = raw.match(/\[CREATE_STORY\]\s*书名[：:]\s*(.+?)\s*\n\s*简介[：:]\s*([\s\S]+?)\s*\[\/CREATE_STORY\]/);
       if (createMatch && !storyId) {
         const s = await createStory(createMatch[1].trim(), userId, createMatch[2].trim());
-        setStoryId(s.id);
-        setStoryTitle(s.title);
+        setStoryId(s.id); setStoryTitle(s.title);
       }
 
       const parsed = parse(raw);
       for (const m of parsed) {
-        if (m.paragraph) {
-          setDraftParagraphs((p) => [...p, m.paragraph!]);
-          setIsWritingChapter(true);
-        }
+        if (m.paragraph) { setDraftParagraphs((p) => [...p, m.paragraph!]); setIsWritingChapter(true); }
       }
       setMsgs((p) => [...p, ...parsed]);
     } catch {
@@ -108,10 +89,68 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
     } finally { setLoading(false); }
   }
 
+  // "生成" button: extract settings and chapters from conversation
+  async function handleExtract() {
+    setExtracting(true);
+    setMsgs((p) => [...p, { role: "momo", text: "让我整理一下我们聊的内容..." }]);
+    try {
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: hist, mode: "extract" }) });
+      const data = await res.json();
+      let content = data.content || "";
+      content = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const match = content.match(/\{[\s\S]*\}/);
+      if (match) {
+        const ex = JSON.parse(match[0]);
+        const parts: string[] = [];
+
+        // Merge codex entries
+        if (ex.codex?.length) {
+          if (storyId) await mergeCodex(storyId, ex.codex);
+          setCodex((prev) => {
+            const merged = [...prev];
+            for (const entry of ex.codex) {
+              const idx = merged.findIndex((e) => e.type === entry.type && e.name === entry.name);
+              if (idx >= 0) merged[idx] = { ...merged[idx], ...entry };
+              else merged.push(entry);
+            }
+            return merged;
+          });
+          const chars = ex.codex.filter((e: CodexEntry) => e.type === "character").length;
+          const locs = ex.codex.filter((e: CodexEntry) => e.type === "location").length;
+          if (chars) parts.push(`${chars}个角色`);
+          if (locs) parts.push(`${locs}个地点`);
+          const others = ex.codex.length - chars - locs;
+          if (others > 0) parts.push(`${others}条其他设定`);
+        }
+
+        // Merge outline
+        if (ex.outline?.overall || ex.outline?.chapters?.length) {
+          if (storyId) await mergeOutline(storyId, ex.outline.overall, ex.outline.chapters);
+          setOutline((prev) => ({
+            overall: ex.outline.overall || prev.overall,
+            chapters: ex.outline.chapters?.length ? ex.outline.chapters : prev.chapters,
+          }));
+          if (ex.outline.overall) parts.push("剧情大纲");
+          if (ex.outline.chapters?.length) parts.push(`${ex.outline.chapters.length}章概要`);
+        }
+
+        // Handle chapter content
+        if (ex.chapter?.content && storyId) {
+          await addChapter(storyId, ex.chapter.title || `第${chapterCount + 1}章`, ex.chapter.content);
+          setChapterCount((n) => n + 1);
+          parts.push(`章节"${ex.chapter.title}"`);
+        }
+
+        setMsgs((p) => [...p, { role: "momo", text: parts.length ? `搞定。已更新：${parts.join("、")}。去草稿页看看？` : "暂时没找到新的设定信息，继续聊吧。" }]);
+      }
+    } catch {
+      setMsgs((p) => [...p, { role: "momo", text: "整理失败了，稍后再试。" }]);
+    } finally { setExtracting(false); }
+  }
+
   function parse(raw: string): Msg[] {
     const out: Msg[] = [];
     let cleaned = raw.replace(/\[CREATE_STORY\][\s\S]*?\[\/CREATE_STORY\]/g, "").trim();
-
     const paraMatch = cleaned.match(/\[PARAGRAPH\]\s*([\s\S]+?)\s*\[\/PARAGRAPH\]/);
     if (paraMatch) {
       const before = cleaned.slice(0, cleaned.indexOf("[PARAGRAPH]")).trim();
@@ -121,7 +160,6 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
       if (after) out.push({ role: "momo", text: after });
       return out;
     }
-
     const cp = [/(?:^|\n)\s*[A-C][.、）)]\s*.+/g, /(?:^|\n)\s*[1-3][.、）)]\s*.+/g];
     let choices: string[] = [], text = cleaned;
     for (const p of cp) { const m = cleaned.match(p); if (m && m.length >= 2) { choices = m.map((x) => x.trim()); for (const x of m) text = text.replace(x, ""); break; } }
@@ -133,39 +171,27 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
 
   async function handleFinishChapter() {
     if (draftParagraphs.length === 0) return;
-    const body = draftParagraphs.join("\n\n");
-    setConfirmDialog({ title: `第${chapterCount + 1}章`, body });
+    setConfirmDialog({ title: `第${chapterCount + 1}章`, body: draftParagraphs.join("\n\n") });
   }
 
   async function confirmSaveChapter() {
     if (!confirmDialog) return;
-    const { title, body } = confirmDialog;
-    if (!storyId) {
-      const s = await createStory(title, userId);
-      setStoryId(s.id); setStoryTitle(s.title);
-      await addChapter(s.id, title, body);
-    } else {
-      await addChapter(storyId, title, body);
-    }
-    setChapterCount((n) => n + 1);
-    setDraftParagraphs([]);
-    setIsWritingChapter(false);
-    setConfirmDialog(null);
-    setMsgs((p) => [...p, { role: "momo", text: `第${chapterCount + 1}章保存好了。继续写下一章？` }]);
+    if (!storyId) { const s = await createStory(confirmDialog.title, userId); setStoryId(s.id); setStoryTitle(s.title); await addChapter(s.id, confirmDialog.title, confirmDialog.body); }
+    else await addChapter(storyId, confirmDialog.title, confirmDialog.body);
+    setChapterCount((n) => n + 1); setDraftParagraphs([]); setIsWritingChapter(false); setConfirmDialog(null);
+    setMsgs((p) => [...p, { role: "momo", text: `第${chapterCount + 1}章保存好了。继续？` }]);
   }
 
-  async function handleDraftSave(world: string, characters: string, plot: string, chapterText: string) {
-    setDraftMeta({ world, characters, plot });
-    if (storyId) {
-      const charList = characters.split("\n").filter(Boolean).map((line) => {
-        const m = line.match(/\*?\*?(.+?)\*?\*?\s*[（(](.+?)[）)][：:]\s*(.*)/);
-        return m ? { name: m[1], role: m[2], description: m[3] } : { name: line.replace(/\*\*/g, "").trim(), role: "", description: "" };
-      });
-      await updateStoryMeta(storyId, { world_building: world, plot_summary: plot, characters: charList });
-    }
-    if (chapterText) setDraftParagraphs(chapterText.split("\n\n").filter(Boolean));
+  async function handleDraftSaveSettings(newCodex: CodexEntry[], newOutline: { overall: string; chapters: OutlineChapter[] }) {
+    setCodex(newCodex); setOutline(newOutline);
+    if (storyId) await updateStoryMeta(storyId, { codex: newCodex, outline: newOutline });
     setViewMode("chat");
-    setMsgs((p) => [...p, { role: "momo", text: "看到你改了草稿，不错。继续？" }]);
+    setMsgs((p) => [...p, { role: "momo", text: "设定更新了，不错。" }]);
+  }
+
+  function handleDraftSaveChapter(text: string) {
+    setDraftParagraphs(text.split("\n\n").filter(Boolean));
+    setViewMode("chat");
   }
 
   function handleSend() { if (!input.trim() || loading) return; send(input.trim()); setInput(""); }
@@ -177,16 +203,14 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
       <div className="flex flex-col h-full">
         <header className="flex items-center gap-3 px-4 h-14 bg-background/90 backdrop-blur-lg border-b shrink-0 z-10">
           <Button variant="outline" size="icon-sm" onClick={onBack}>←</Button>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold truncate">{storyTitle ? `📖 ${storyTitle}` : "草稿"}</p>
-          </div>
+          <div className="flex-1 min-w-0"><p className="text-sm font-semibold truncate">{storyTitle || "草稿"}</p></div>
           <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
             <button onClick={() => setViewMode("chat")} className="px-3 py-1 text-xs rounded-md text-muted-foreground">聊天</button>
             <button className="px-3 py-1 text-xs rounded-md bg-background shadow-sm font-medium">草稿</button>
           </div>
         </header>
-        <DraftMode world={draftMeta.world} characters={draftMeta.characters} plot={draftMeta.plot}
-          currentChapter={draftParagraphs.join("\n\n")} chapterNumber={chapterCount + 1} onSave={handleDraftSave} />
+        <DraftMode codex={codex} outline={outline} currentChapter={draftParagraphs.join("\n\n")} chapterNumber={chapterCount + 1}
+          chapterParagraphs={draftParagraphs} onSaveSettings={handleDraftSaveSettings} onSaveChapter={handleDraftSaveChapter} />
       </div>
     );
   }
@@ -194,7 +218,6 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
   // Chat mode
   return (
     <div className="flex flex-col h-full">
-      {/* Confirm dialog */}
       {confirmDialog && (
         <div className="absolute inset-0 z-50 bg-black/40 flex items-center justify-center p-6" onClick={() => setConfirmDialog(null)}>
           <Card className="w-full max-w-[340px]" onClick={(e) => e.stopPropagation()}>
@@ -210,13 +233,12 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         </div>
       )}
 
-      {/* Header */}
       <header className="flex items-center gap-3 px-4 h-14 bg-background/90 backdrop-blur-lg border-b shrink-0 z-10">
         <Button variant="outline" size="icon-sm" onClick={onBack}>←</Button>
         <MomoOrbSmall speaking={loading} />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold leading-tight truncate">{storyTitle ? `📖 ${storyTitle}` : "Momo"}</p>
-          <p className="text-[10px] text-muted-foreground">{loading ? "构思中..." : storyTitle ? `已写${chapterCount}章${draftParagraphs.length > 0 ? ` · 当前章${draftParagraphs.length}段` : ""}` : "新故事"}</p>
+          <p className="text-[10px] text-muted-foreground">{loading ? "构思中..." : storyTitle ? `${chapterCount}章 · ${codex.length}条设定` : "新故事"}</p>
         </div>
         <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
           <button className="px-3 py-1 text-xs rounded-md bg-background shadow-sm font-medium">聊天</button>
@@ -224,7 +246,6 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         </div>
       </header>
 
-      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {msgs.map((m, i) => (
           <div key={i}>
@@ -262,8 +283,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
           </div>
         ))}
         {loading && (
-          <div className="flex items-start gap-2.5">
-            <MomoOrbSmall speaking />
+          <div className="flex items-start gap-2.5"><MomoOrbSmall speaking />
             <div className="bg-card rounded-2xl rounded-tl-sm px-4 py-3 ring-1 ring-border flex gap-2">
               <span className="w-2 h-2 rounded-full bg-[#FF6B6B] dot-anim-1" /><span className="w-2 h-2 rounded-full bg-[#FF9A5C] dot-anim-2" /><span className="w-2 h-2 rounded-full bg-[#FFD06B] dot-anim-3" />
             </div>
@@ -274,19 +294,23 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         )}
       </div>
 
-      {/* Bottom bar: input + finish chapter button */}
+      {/* Bottom bar */}
       <div className="shrink-0 bg-background/90 backdrop-blur-lg border-t">
-        {/* Finish chapter button - visible when writing */}
-        {isWritingChapter && draftParagraphs.length > 0 && (
-          <div className="px-4 pt-2">
-            <Button variant="outline" className="w-full h-9 text-xs text-[#FF6B6B] border-[#FF6B6B]/30 hover:bg-[#FF6B6B]/5" onClick={handleFinishChapter}>
-              ✓ 本章完成（已写{draftParagraphs.length}段）→ 保存到作品
+        {/* Action buttons row */}
+        <div className="flex gap-2 px-4 pt-2">
+          {isWritingChapter && draftParagraphs.length > 0 && (
+            <Button variant="outline" size="sm" className="flex-1 text-xs text-[#FF6B6B] border-[#FF6B6B]/30" onClick={handleFinishChapter}>
+              ✓ 本章完成（{draftParagraphs.length}段）
             </Button>
-          </div>
-        )}
+          )}
+          <Button variant="outline" size="sm" className="text-xs" onClick={handleExtract} disabled={extracting || loading || hist.length === 0}>
+            {extracting ? "⏳ 整理中..." : "📝 生成到作品"}
+          </Button>
+        </div>
+        {/* Input row */}
         <div className="flex items-center gap-2 px-4 py-3">
-          <Input className="chat-input h-10 flex-1" placeholder="🎤 说说你的想法..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()} disabled={loading} />
-          <Button size="icon" className="h-10 w-10 shrink-0 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }} onClick={handleSend} disabled={!input.trim() || loading}>↑</Button>
+          <Input className="chat-input h-10 flex-1" placeholder="🎤 说说你的想法..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()} disabled={loading || extracting} />
+          <Button size="icon" className="h-10 w-10 shrink-0 text-white border-0" style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }} onClick={handleSend} disabled={!input.trim() || loading || extracting}>↑</Button>
         </div>
       </div>
     </div>
