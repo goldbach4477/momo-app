@@ -59,23 +59,34 @@ function emptyMeta(userId: string, desc?: string): StoryMeta {
 function parseMeta(description: string): StoryMeta {
   try {
     const parsed = JSON.parse(description);
-    if (parsed.user_id) {
-      // Migrate old format
-      if (!parsed.codex) {
-        const codex: CodexEntry[] = [];
-        if (parsed.characters) {
-          for (const c of parsed.characters) {
-            codex.push({ type: "character", name: c.name, description: c.description || "", details: { role: c.role || "" } });
+    if (parsed && typeof parsed === "object") {
+      // Ensure all required fields exist with safe defaults
+      const meta: StoryMeta = {
+        user_id: parsed.user_id || "",
+        display_description: parsed.display_description || "",
+        codex: Array.isArray(parsed.codex) ? parsed.codex : [],
+        outline: {
+          overall: parsed.outline?.overall || parsed.plot_summary || "",
+          chapters: Array.isArray(parsed.outline?.chapters) ? parsed.outline.chapters : [],
+        },
+      };
+      // Migrate old character format
+      if (!meta.codex.length && Array.isArray(parsed.characters)) {
+        for (const c of parsed.characters) {
+          if (c && c.name) {
+            meta.codex.push({ type: "character", name: c.name, description: c.description || "", details: { role: c.role || "" } });
           }
         }
-        parsed.codex = codex;
       }
-      if (!parsed.outline) {
-        parsed.outline = { overall: parsed.plot_summary || "", chapters: [] };
+      // Migrate old world_building
+      if (parsed.world_building && !meta.codex.some((e: CodexEntry) => e.type === "lore")) {
+        meta.codex.push({ type: "lore", name: "世界观", description: parsed.world_building });
       }
-      return parsed;
+      return meta;
     }
-  } catch {}
+  } catch {
+    // description is not JSON — treat as plain text
+  }
   return emptyMeta("", description || "");
 }
 

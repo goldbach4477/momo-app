@@ -40,7 +40,7 @@ export default function App() {
   return (
     <Shell>
       <div className="flex-1 overflow-y-auto pb-14">
-        {tab === "home" && <HomeTab onStartChat={openChat} />}
+        {tab === "home" && <HomeTab userId={user?.id} onStartChat={openChat} onContinueStory={(id) => openChat("", id)} />}
         {tab === "discover" && <DiscoverTab />}
         {tab === "works" && (user ? <WorksTab key={worksKey} userId={user.id} onContinue={(id) => openChat("", id)} onRead={openReading} /> : <NeedLogin onGo={() => setTab("me")} />)}
         {tab === "me" && <MeTab user={user} onLogin={handleLogin} onSignup={handleSignup} onLogout={logout} />}

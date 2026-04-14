@@ -89,12 +89,13 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
     } finally { setLoading(false); }
   }
 
-  // "生成" button: extract settings and chapters from conversation
-  async function handleExtract() {
+  // Generation: "extract" = only what was discussed, "full-generate" = fill in everything
+  async function handleGenerate(genMode: "extract" | "full-generate") {
     setExtracting(true);
-    setMsgs((p) => [...p, { role: "momo", text: "让我整理一下我们聊的内容..." }]);
+    const label = genMode === "extract" ? "整理对话内容" : "全量生成设定和大纲";
+    setMsgs((p) => [...p, { role: "momo", text: `正在${label}，请稍等...这可能需要一点时间 ⏳` }]);
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: hist, mode: "extract" }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: hist, storyContext: `故事灵感：${initialSeed}`, mode: genMode }) });
       const data = await res.json();
       let content = data.content || "";
       content = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
@@ -141,7 +142,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
           parts.push(`章节"${ex.chapter.title}"`);
         }
 
-        setMsgs((p) => [...p, { role: "momo", text: parts.length ? `搞定。已更新：${parts.join("、")}。去草稿页看看？` : "暂时没找到新的设定信息，继续聊吧。" }]);
+        setMsgs((p) => [...p, { role: "momo", text: parts.length ? `✅ 搞定！已更新：${parts.join("、")}。切到草稿页看看？` : "暂时没找到新的设定信息，继续聊吧。" }]);
       }
     } catch {
       setMsgs((p) => [...p, { role: "momo", text: "整理失败了，稍后再试。" }]);
@@ -205,10 +206,16 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
           <Button variant="outline" size="icon-sm" onClick={onBack}>←</Button>
           <div className="flex-1 min-w-0"><p className="text-sm font-semibold truncate">{storyTitle || "草稿"}</p></div>
           <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
-            <button onClick={() => setViewMode("chat")} className="px-3 py-1 text-xs rounded-md text-muted-foreground">聊天</button>
+            <button onClick={() => !extracting && setViewMode("chat")} className={`px-3 py-1 text-xs rounded-md ${extracting ? "opacity-40" : "text-muted-foreground"}`}>聊天</button>
             <button className="px-3 py-1 text-xs rounded-md bg-background shadow-sm font-medium">草稿</button>
           </div>
         </header>
+        {extracting && (
+          <div className="px-4 py-2 bg-[#FFF5F0] border-b flex items-center gap-2 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-[#FF6B6B] dot-anim-1" />
+            <span className="text-xs text-[#FF6B6B]">正在生成设定...</span>
+          </div>
+        )}
         <DraftMode codex={codex} outline={outline} currentChapter={draftParagraphs.join("\n\n")} chapterNumber={chapterCount + 1}
           chapterParagraphs={draftParagraphs} onSaveSettings={handleDraftSaveSettings} onSaveChapter={handleDraftSaveChapter} />
       </div>
@@ -242,7 +249,7 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
         </div>
         <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
           <button className="px-3 py-1 text-xs rounded-md bg-background shadow-sm font-medium">聊天</button>
-          <button onClick={() => setViewMode("draft")} className="px-3 py-1 text-xs rounded-md text-muted-foreground">草稿</button>
+          <button onClick={() => !extracting && setViewMode("draft")} className={`px-3 py-1 text-xs rounded-md ${extracting ? "opacity-40" : "text-muted-foreground"}`}>草稿</button>
         </div>
       </header>
 
@@ -296,15 +303,27 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
 
       {/* Bottom bar */}
       <div className="shrink-0 bg-background/90 backdrop-blur-lg border-t">
+        {/* Extracting indicator */}
+        {extracting && (
+          <div className="px-4 py-2 bg-[#FFF5F0] flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#FF6B6B] dot-anim-1" />
+            <span className="w-2 h-2 rounded-full bg-[#FF9A5C] dot-anim-2" />
+            <span className="w-2 h-2 rounded-full bg-[#FFD06B] dot-anim-3" />
+            <span className="text-xs text-[#FF6B6B] ml-1">正在生成设定...</span>
+          </div>
+        )}
         {/* Action buttons row */}
         <div className="flex gap-2 px-4 pt-2">
           {isWritingChapter && draftParagraphs.length > 0 && (
-            <Button variant="outline" size="sm" className="flex-1 text-xs text-[#FF6B6B] border-[#FF6B6B]/30" onClick={handleFinishChapter}>
+            <Button variant="outline" size="sm" className="flex-1 text-xs text-[#FF6B6B] border-[#FF6B6B]/30" onClick={handleFinishChapter} disabled={extracting}>
               ✓ 本章完成（{draftParagraphs.length}段）
             </Button>
           )}
-          <Button variant="outline" size="sm" className="text-xs" onClick={handleExtract} disabled={extracting || loading || hist.length === 0}>
-            {extracting ? "⏳ 整理中..." : "📝 生成到作品"}
+          <Button variant="outline" size="sm" className="text-xs" onClick={() => handleGenerate("extract")} disabled={extracting || loading || hist.length === 0}>
+            📝 按对话生成
+          </Button>
+          <Button variant="outline" size="sm" className="text-xs" onClick={() => handleGenerate("full-generate")} disabled={extracting || loading || hist.length === 0}>
+            🚀 全量生成
           </Button>
         </div>
         {/* Input row */}

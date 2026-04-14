@@ -6,23 +6,33 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import MomoOrb from "./MomoOrb";
 import { SEEDS } from "@/lib/seeds";
+import { getStories, type Story } from "@/lib/store";
 
-export default function HomeTab({ onStartChat }: { onStartChat: (seed: string) => void }) {
+export default function HomeTab({ userId, onStartChat, onContinueStory }: {
+  userId?: string;
+  onStartChat: (seed: string) => void;
+  onContinueStory?: (storyId: string) => void;
+}) {
   const [mounted, setMounted] = useState(false);
   const [input, setInput] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [recentStory, setRecentStory] = useState<Story | null>(null);
 
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    setMounted(true);
+    if (userId) {
+      getStories(userId).then((stories) => {
+        if (stories.length > 0) setRecentStory(stories[0]);
+      });
+    }
+  }, [userId]);
 
-  // Pick 3 random seeds on mount and on refresh
   const picked = useMemo(() => {
-    if (!mounted) return SEEDS.slice(0, 3);
+    if (!mounted) return SEEDS.slice(0, 2);
     const shuffled = [...SEEDS].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, 3);
+    return shuffled.slice(0, 2);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, refreshKey]);
-
-  const mainSeed = picked[0];
 
   return (
     <div className="px-4 pt-10 pb-6 space-y-5">
@@ -33,47 +43,45 @@ export default function HomeTab({ onStartChat }: { onStartChat: (seed: string) =
         <p className="text-xs text-muted-foreground mt-0.5">你的专属故事编辑</p>
       </div>
 
-      {/* Main seed */}
-      {mounted && (
+      {/* Continue recent story — top priority */}
+      {recentStory && onContinueStory && (
         <Card>
-          <CardContent className="space-y-4">
-            <p className="text-[11px] font-medium text-muted-foreground tracking-wider uppercase">✦ 今日灵感</p>
-            <div className="flex gap-3">
-              <span className="text-3xl leading-none mt-0.5">{mainSeed.emoji}</span>
-              <p className="text-sm leading-relaxed font-medium flex-1">{mainSeed.text}</p>
+          <CardContent className="space-y-3">
+            <p className="text-[11px] font-medium text-muted-foreground tracking-wider uppercase">📖 继续创作</p>
+            <div>
+              <p className="text-base font-semibold">{recentStory.title}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {recentStory.chapters.length}章 · {recentStory.meta.codex.length}条设定
+                · 更新于 {new Date(recentStory.updated_at).toLocaleDateString("zh-CN")}
+              </p>
             </div>
-            <div className="flex gap-2">
-              <Button
-                className="flex-1 h-10 text-sm font-semibold text-white border-0"
-                style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
-                onClick={() => onStartChat(mainSeed.text)}
-              >
-                这个有意思，聊聊！
-              </Button>
-              <Button variant="outline" size="icon" className="h-10 w-10 shrink-0"
-                onClick={() => setRefreshKey((k) => k + 1)}>
-                ↻
-              </Button>
-            </div>
+            <Button className="w-full h-10 text-sm font-semibold text-white border-0"
+              style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
+              onClick={() => onContinueStory(recentStory.id)}>
+              继续上次的故事
+            </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* More seeds */}
-      {mounted && picked.length > 1 && (
-        <div className="grid grid-cols-2 gap-2">
-          {picked.slice(1, 3).map((s, i) => (
-            <Card key={i} size="sm" className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => onStartChat(s.text)}>
-              <CardContent>
-                <div className="flex items-start gap-2">
-                  <span className="text-lg">{s.emoji}</span>
-                  <p className="text-xs leading-relaxed flex-1 line-clamp-3">{s.text}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      {/* New inspiration */}
+      {mounted && (
+        <Card>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-medium text-muted-foreground tracking-wider uppercase">✦ 新灵感</p>
+              <button onClick={() => setRefreshKey((k) => k + 1)}
+                className="text-[11px] text-[#FF6B6B] bg-transparent border-none cursor-pointer">↻ 换一批</button>
+            </div>
+            {picked.map((seed, i) => (
+              <div key={i} className="flex gap-3 cursor-pointer hover:bg-muted/50 rounded-lg p-2 -mx-2 transition-colors"
+                onClick={() => onStartChat(seed.text)}>
+                <span className="text-2xl leading-none mt-0.5">{seed.emoji}</span>
+                <p className="text-sm leading-relaxed flex-1">{seed.text}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       {/* Custom input */}
@@ -86,9 +94,7 @@ export default function HomeTab({ onStartChat }: { onStartChat: (seed: string) =
             <Button size="icon" className="h-10 w-10 shrink-0 text-white border-0"
               style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
               disabled={!input.trim()}
-              onClick={() => { if (input.trim()) { onStartChat(input.trim()); setInput(""); } }}>
-              ↑
-            </Button>
+              onClick={() => { if (input.trim()) { onStartChat(input.trim()); setInput(""); } }}>↑</Button>
           </div>
         </CardContent>
       </Card>
