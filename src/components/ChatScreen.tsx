@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import MomoOrb, { MomoOrbSmall } from "./MomoOrb";
 import { createStory, addChapter, getStory, mergeCodex, mergeOutline, updateStoryMeta, type CodexEntry, type OutlineChapter } from "@/lib/store";
+import { saveSession, getSession, type ChatSession } from "@/lib/chatCache";
 import DraftMode from "./DraftMode";
 
 type Msg = { role: "momo" | "user"; text: string; choices?: string[]; paragraph?: string };
@@ -32,9 +33,45 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
   const init = useRef(false);
   const msgCount = useRef(0);
 
+  const sessionId = initialStoryId || `new-${initialSeed?.slice(0, 20) || "empty"}`;
+
+  // Save session on every meaningful state change
+  useEffect(() => {
+    if (msgs.length > 0) {
+      saveSession({
+        id: sessionId,
+        storyId,
+        storyTitle,
+        seed: initialSeed,
+        messages: msgs,
+        apiHistory: hist,
+        draftParagraphs,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }, [msgs, storyId, storyTitle, draftParagraphs, hist, sessionId, initialSeed]);
+
   useEffect(() => {
     if (!init.current) {
       init.current = true;
+
+      // Try to restore cached session
+      const cached = getSession(sessionId);
+      if (cached && cached.messages.length > 0) {
+        setMsgs(cached.messages as Msg[]);
+        setHist(cached.apiHistory);
+        setDraftParagraphs(cached.draftParagraphs);
+        if (cached.storyId) { setStoryId(cached.storyId); setStoryTitle(cached.storyTitle); }
+        msgCount.current = cached.messages.filter((m) => m.role === "user").length;
+        // Refresh story metadata from DB
+        if (cached.storyId) {
+          getStory(cached.storyId).then((story) => {
+            if (story) { setChapterCount(story.chapters.length); setCodex(story.meta.codex); setOutline(story.meta.outline); }
+          }).catch(() => {});
+        }
+        return; // Don't re-send initial message
+      }
+
       if (initialStoryId) {
         getStory(initialStoryId).then((story) => {
           if (story) {

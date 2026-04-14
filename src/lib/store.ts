@@ -99,10 +99,15 @@ function serialize(meta: StoryMeta): string {
 export async function getStories(userId?: string): Promise<Story[]> {
   if (!supabase) return [];
   try {
-    const { data: stories, error: sErr } = await supabase.from("stories").select("*").order("updated_at", { ascending: false });
-    if (sErr) { console.error("Stories query error:", sErr); return []; }
+    // Parallel queries for speed
+    const [storiesRes, chaptersRes] = await Promise.all([
+      supabase.from("stories").select("*").order("updated_at", { ascending: false }),
+      supabase.from("chapters").select("*").order("number", { ascending: true }),
+    ]);
+    const stories = storiesRes.data;
+    const chapters = chaptersRes.data;
+    if (storiesRes.error) { console.error("Stories query error:", storiesRes.error); return []; }
     if (!stories) return [];
-    const { data: chapters } = await supabase.from("chapters").select("*").order("number", { ascending: true });
     return stories
       .map((s) => {
         try {

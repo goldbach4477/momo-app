@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import MomoOrb from "./MomoOrb";
 import { SEEDS } from "@/lib/seeds";
 import { getStories, type Story } from "@/lib/store";
+import { getRecentSession, type ChatSession } from "@/lib/chatCache";
 
 export default function HomeTab({ userId, onStartChat, onContinueStory }: {
   userId?: string;
@@ -17,9 +18,14 @@ export default function HomeTab({ userId, onStartChat, onContinueStory }: {
   const [input, setInput] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [recentStory, setRecentStory] = useState<Story | null>(null);
+  const [recentChat, setRecentChat] = useState<ChatSession | null>(null);
 
   useEffect(() => {
     setMounted(true);
+    // Check for recent unsaved chat session
+    const cached = getRecentSession();
+    if (cached && cached.messages.length > 0) setRecentChat(cached);
+    // Check for recent saved story
     if (userId) {
       getStories(userId).then((stories) => {
         if (stories.length > 0) setRecentStory(stories[0]);
@@ -43,7 +49,25 @@ export default function HomeTab({ userId, onStartChat, onContinueStory }: {
         <p className="text-xs text-muted-foreground mt-0.5">你的专属故事编辑</p>
       </div>
 
-      {/* Continue recent story — top priority */}
+      {/* Resume recent chat session — highest priority */}
+      {recentChat && !recentChat.storyId && (
+        <Card>
+          <CardContent className="space-y-3">
+            <p className="text-[11px] font-medium text-muted-foreground tracking-wider uppercase">💬 上次的对话</p>
+            <div>
+              <p className="text-sm">{recentChat.seed?.slice(0, 40)}...</p>
+              <p className="text-xs text-muted-foreground mt-1">{recentChat.messages.length}条消息</p>
+            </div>
+            <Button className="w-full h-10 text-sm font-semibold text-white border-0"
+              style={{ background: "linear-gradient(135deg, #FF6B6B, #FF9A5C)" }}
+              onClick={() => onStartChat(recentChat.seed)}>
+              继续聊
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Continue recent saved story */}
       {recentStory && onContinueStory && (
         <Card>
           <CardContent className="space-y-3">
