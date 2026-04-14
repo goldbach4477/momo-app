@@ -5,19 +5,21 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { getStories, type Story, type CodexEntryType } from "@/lib/store";
+import { getStories, renameStory, type Story, type CodexEntryType } from "@/lib/store";
 
 const TYPE_LABELS: Record<CodexEntryType, string> = {
   character: "👥 人物", location: "🗺️ 地点", item: "⚔️ 物品", lore: "📜 规则", faction: "🏴 势力", other: "📌 其他"
 };
 
 export default function WorksTab({ userId, onContinue, onRead }: {
-  userId: string; onContinue: (storyId: string) => void; onRead: (title: string, content: string) => void;
+  userId: string; onContinue: (storyId: string) => void; onRead: (title: string, content: string, storyId?: string, chNum?: number, illust?: string) => void;
 }) {
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [tab, setTab] = useState<"settings" | "chapters">("settings");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   useEffect(() => {
     // Show cached stories instantly, then refresh from DB
@@ -56,7 +58,18 @@ export default function WorksTab({ userId, onContinue, onRead }: {
           <Card key={story.id}>
             <CardHeader className="cursor-pointer" onClick={() => { setExpanded(isOpen ? null : story.id); }}>
               <div className="flex items-center justify-between">
-                <CardTitle>{story.title}</CardTitle>
+                {renaming === story.id ? (
+                  <div className="flex gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
+                    <input value={renameValue} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && renameValue.trim()) { renameStory(story.id, renameValue.trim()).then(() => { getStories(userId).then(setStories); setRenaming(null); }); } }}
+                      className="flex-1 text-base font-semibold bg-muted rounded px-2 py-1 outline-none" autoFocus />
+                    <Button size="sm" variant="outline" className="text-xs" onClick={() => { if (renameValue.trim()) { renameStory(story.id, renameValue.trim()).then(() => { getStories(userId).then(setStories); setRenaming(null); }); } }}>✓</Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <CardTitle>{story.title}</CardTitle>
+                    <button onClick={(e) => { e.stopPropagation(); setRenaming(story.id); setRenameValue(story.title); }} className="text-[10px] text-muted-foreground bg-transparent border-none cursor-pointer hover:text-[#FF6B6B]">✏️</button>
+                  </div>
+                )}
                 <span className="text-muted-foreground text-xs">{isOpen ? "▲" : "▼"}</span>
               </div>
               <CardDescription>{story.meta.display_description}</CardDescription>
@@ -121,13 +134,16 @@ export default function WorksTab({ userId, onContinue, onRead }: {
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {story.chapters.length > 0 ? story.chapters.map((ch) => (
-                      <button key={ch.id} onClick={() => onRead(ch.title, ch.content)}
-                        className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-muted transition-colors text-sm flex items-center justify-between group">
-                        <span><span className="text-muted-foreground mr-2">第{ch.number}章</span>{ch.title}</span>
-                        <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100">阅读 →</span>
-                      </button>
-                    )) : <p className="text-xs text-muted-foreground text-center py-4">还没写任何章节</p>}
+                    {story.chapters.length > 0 ? story.chapters.map((ch) => {
+                      const extra = story.meta.chapterExtras?.find((e) => e.number === ch.number);
+                      return (
+                        <button key={ch.id} onClick={() => onRead(extra?.chapterTitle || ch.title, ch.content, story.id, ch.number, extra?.illustration)}
+                          className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-muted transition-colors text-sm flex items-center justify-between group">
+                          <span><span className="text-muted-foreground mr-2">第{ch.number}章</span>{extra?.chapterTitle || ch.title}</span>
+                          <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100">阅读 →</span>
+                        </button>
+                      );
+                    }) : <p className="text-xs text-muted-foreground text-center py-4">还没写任何章节</p>}
                   </div>
                 )}
 

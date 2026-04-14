@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import MomoOrb, { MomoOrbSmall } from "./MomoOrb";
-import { createStory, addChapter, getStory, mergeCodex, mergeOutline, updateStoryMeta, type CodexEntry, type OutlineChapter } from "@/lib/store";
-import { saveSession, getSession, type ChatSession } from "@/lib/chatCache";
+import { createStory, addChapter, getStory, mergeCodex, mergeOutline, updateStoryMeta, saveChapterExtra, buildStoryMemory, type CodexEntry, type OutlineChapter } from "@/lib/store";
+import { saveSession, getSession } from "@/lib/chatCache";
 import DraftMode from "./DraftMode";
 
 type Msg = { role: "momo" | "user"; text: string; choices?: string[]; paragraph?: string };
@@ -99,9 +99,15 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
     msgCount.current++;
     const autoMode = mode || (msgCount.current <= 1 ? "flash" : "pro");
     const writingInfo = isWritingChapter ? `正在写第${chapterCount + 1}章，已写${draftParagraphs.length}段。` : "";
-    const storyCtx = storyId && storyTitle
-      ? `\n\n当前创作：《${storyTitle}》，已完成${chapterCount}章。${writingInfo}\n已有设定：${codex.length}条，大纲：${outline.chapters.length}章`
-      : `\n\n故事灵感：${initialSeed}\n用户还没创建作品。`;
+
+    // Build story memory for better context
+    let storyCtx: string;
+    if (storyId && storyTitle) {
+      const memory = await buildStoryMemory(storyId).catch(() => "");
+      storyCtx = `\n\n当前创作：《${storyTitle}》，已完成${chapterCount}章。${writingInfo}\n\n${memory || `已有设定：${codex.length}条，大纲：${outline.chapters.length}章`}`;
+    } else {
+      storyCtx = `\n\n故事灵感：${initialSeed}\n用户还没创建作品。`;
+    }
 
     const h = [...hist, { role: "user", content: text }];
     try {
@@ -225,10 +231,28 @@ export default function ChatScreen({ initialSeed, storyId: initialStoryId, userI
 
   async function confirmSaveChapter() {
     if (!confirmDialog) return;
-    if (!storyId) { const s = await createStory(confirmDialog.title, userId); setStoryId(s.id); setStoryTitle(s.title); await addChapter(s.id, confirmDialog.title, confirmDialog.body); }
-    else await addChapter(storyId, confirmDialog.title, confirmDialog.body);
-    setChapterCount((n) => n + 1); setDraftParagraphs([]); setIsWritingChapter(false); setConfirmDialog(null);
-    setMsgs((p) => [...p, { role: "momo", text: `第${chapterCount + 1}章保存好了。继续？` }]);
+    let sid = storyId;
+    if (!sid) { const s = await createStory("新故事", userId, initialSeed?.slice(0, 50)); sid = s.id; setStoryId(s.id); setStoryTitle(s.title); }
+
+    // Generate chapter title via AI
+    let chTitle = confirmDialog.title;
+    try {
+      const titleRes = await fetch("/api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: confirmDialog.body, type: "title" }) });
+      const titleData = await titleRes.json();
+      if (titleData.result) chTitle = titleData.result;
+    } catch {}
+
+    await addChapter(sid, chTitle, confirmDialog.body);
+    const newChNum = chapterCount + 1;
+
+    // Generate summary in background for story memory
+    fetch("/api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: confirmDialog.body, type: "summary" }) })
+      .then((r) => r.json())
+      .then((d) => { if (d.result) saveChapterExtra(sid!, newChNum, { chapterTitle: chTitle, summary: d.result }); })
+      .catch(() => {});
+
+    setChapterCount(newChNum); setDraftParagraphs([]); setIsWritingChapter(false); setConfirmDialog(null);
+    setMsgs((p) => [...p, { role: "momo", text: `第${newChNum}章「${chTitle}」保存好了。继续？` }]);
   }
 
   async function handleDraftSaveSettings(newCodex: CodexEntry[], newOutline: { overall: string; chapters: OutlineChapter[] }) {

@@ -19,7 +19,7 @@ export default function App() {
   const [chatSeed, setChatSeed] = useState("");
   const [chatStoryId, setChatStoryId] = useState<string | undefined>();
   const [readingOpen, setReadingOpen] = useState(false);
-  const [readChap, setReadChap] = useState({ title: "", content: "" });
+  const [readChap, setReadChap] = useState({ title: "", content: "", storyId: "", chapterNumber: 0, illustration: "" });
   const [worksKey, setWorksKey] = useState(0);
 
   const openChat = (seed: string, storyId?: string) => {
@@ -28,14 +28,17 @@ export default function App() {
     setChatStoryId(storyId);
     setChatOpen(true);
   };
-  const openReading = (t: string, c: string) => { setReadChap({ title: t, content: c }); setReadingOpen(true); };
+  const openReading = (t: string, c: string, sId?: string, chNum?: number, illust?: string) => {
+    setReadChap({ title: t, content: c, storyId: sId || "", chapterNumber: chNum || 0, illustration: illust || "" });
+    setReadingOpen(true);
+  };
   const closeChat = () => { setChatOpen(false); setChatStoryId(undefined); setWorksKey((n) => n + 1); };
 
   const handleLogin = async (u: string, p: string) => { await login(u, p); setTab("home"); };
   const handleSignup = async (u: string, p: string) => { await signup(u, p); setTab("home"); };
 
   if (chatOpen) return <Shell><ChatScreen initialSeed={chatSeed} storyId={chatStoryId} userId={user?.id || ""} onBack={closeChat} onReadChapter={openReading} /></Shell>;
-  if (readingOpen) return <Shell><ReadingScreen title={readChap.title} content={readChap.content} onBack={() => setReadingOpen(false)} /></Shell>;
+  if (readingOpen) return <Shell><ReadingScreen title={readChap.title} content={readChap.content} storyId={readChap.storyId} chapterNumber={readChap.chapterNumber} savedIllustration={readChap.illustration} onBack={() => { setReadingOpen(false); setWorksKey((n) => n + 1); }} onSaveIllustration={(url) => { if (readChap.storyId && readChap.chapterNumber) { import("@/lib/store").then(({ saveChapterExtra }) => saveChapterExtra(readChap.storyId, readChap.chapterNumber, { illustration: url })); } }} /></Shell>;
 
   return (
     <Shell>
